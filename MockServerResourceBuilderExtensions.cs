@@ -53,6 +53,10 @@ public static class MockServerResourceBuilderExtensions
     /// Registers a WSDL file with the MockServer resource. Once the container is ready, the WSDL is
     /// submitted to MockServer's <c>PUT /mockserver/wsdl</c> endpoint, generating one SOAP expectation
     /// per operation declared in the document.
+    /// <para>
+    /// The paths to expectations corresponding to each operation in the WSDL will be automatically published as URLs
+    /// which can be seen in the resource details.
+    /// </para>
     /// </summary>
     /// <param name="builder">The <see cref="IResourceBuilder{T}"/> for the MockServer resource.</param>
     /// <param name="wsdlFilePath">
@@ -135,7 +139,7 @@ public static class MockServerResourceBuilderExtensions
             return expectation.HttpRequest?.Path ?? "operation";
         }
 
-        var separatorIndex = id.LastIndexOf('.');
-        return separatorIndex >= 0 ? id[(separatorIndex + 1)..] : id;
+        var fragments = id.Split('.');
+        return fragments.Last();
     }
 }
