@@ -1,11 +1,8 @@
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Lifecycle;
 using Aspire.Hosting.MockServer;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.Extensions.Logging;
-using MockServer.Client;
-using MockServer.Client.Models;
-using System.Collections.Immutable;
 
 namespace Aspire.Hosting;
 
@@ -43,6 +40,8 @@ public static class MockServerResourceBuilderExtensions
                 failureStatus: default,
                 tags: default));
 
+        builder.Services.TryAddEventingSubscriber<WsdlExpectationSubscriber>();
+
         return builder.AddResource(resource)
             .WithImage("mockserver/mockserver", tag)
             .WithHttpEndpoint(port: port, targetPort: targetPort ?? MockServerResource.DefaultContainerPort, name: MockServerResource.HttpEndpointName)
@@ -76,70 +75,6 @@ public static class MockServerResourceBuilderExtensions
 
         builder.Resource.Annotations.Add(new WsdlAnnotation(resolvedPath));
 
-        builder.ApplicationBuilder.Eventing.Subscribe<ResourceReadyEvent>(builder.Resource, async (@event, cancellationToken) =>
-        {
-            var loggerService = @event.Services.GetRequiredService<ResourceLoggerService>();
-            var logger = loggerService.GetLogger(builder.Resource);
-
-            try
-            {
-                var wsdl = await File.ReadAllTextAsync(resolvedPath, cancellationToken).ConfigureAwait(false);
-                var uri = new Uri(await builder.Resource.UriExpression.GetValueAsync(cancellationToken).ConfigureAwait(false) ?? string.Empty);
-
-                using var client = new MockServerClient(uri.Host, uri.Port, secure: uri.Scheme == "https");
-                var expectations = await client.WsdlExpectationAsync(wsdl).ConfigureAwait(false);
-
-                logger.LogInformation(
-                    "Registered {Count} SOAP expectation(s) from WSDL {WsdlFile} on MockServer resource {ResourceName}",
-                    expectations.Count,
-                    resolvedPath,
-                    builder.Resource.Name);
-
-                await PublishExpectationUrlsAsync(builder.Resource, uri, expectations, @event.Services, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Failed to import WSDL {WsdlFile} into MockServer resource {ResourceName}", resolvedPath, builder.Resource.Name);
-            }
-        });
-
         return builder;
-    }
-
-    private static Task PublishExpectationUrlsAsync(
-        MockServerResource resource,
-        Uri baseUri,
-        List<Expectation> expectations,
-        IServiceProvider services,
-        CancellationToken cancellationToken)
-    {
-        var urls = expectations
-            .Where(e => !string.IsNullOrEmpty(e.HttpRequest?.Path))
-            .Select(e => new UrlSnapshot(MockServerResource.HttpEndpointName, new Uri(baseUri, e.HttpRequest!.Path!).ToString(), IsInternal: true)
-            {
-                DisplayProperties = new UrlDisplayPropertiesSnapshot(GetOperationName(e))
-            })
-            .ToImmutableArray();
-
-        if (urls.IsEmpty)
-        {
-            return Task.CompletedTask;
-        }
-
-        var notificationService = services.GetRequiredService<ResourceNotificationService>();
-        return notificationService.PublishUpdateAsync(resource, snapshot => snapshot with { Urls = snapshot.Urls.AddRange(urls) });
-    }
-
-    // The WSDL importer names each expectation "{ServiceName}.{OperationName}".
-    private static string GetOperationName(Expectation expectation)
-    {
-        var id = expectation.Id;
-        if (string.IsNullOrEmpty(id))
-        {
-            return expectation.HttpRequest?.Path ?? "operation";
-        }
-
-        var fragments = id.Split('.');
-        return fragments.Last();
     }
 }
